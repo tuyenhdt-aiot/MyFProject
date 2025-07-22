@@ -1,0 +1,61 @@
+name: Build, Push, Pull & Deploy (Self-hosted)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build_push_pull_run:
+    runs-on: self-hosted
+    environment: ENV
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Add .env to backend
+        working-directory: ./backend
+        run: echo "${{ secrets.BACKEND }}" > .env
+
+      - name: Build backend image
+        run: docker build -t ${{secrets.DOCKERHUB_USERNAME}}/my-f-backend:latest ./backend
+
+      - name: Build frontend image
+        run: docker build -t ${{secrets.DOCKERHUB_USERNAME}}/my-f-frontend:latest -f ./frontend/dockerfile.prod ./frontend
+
+      - name: Login to Docker Hub
+        run: echo ${{secrets.DOCKERHUB_TOKEN}} | docker login -u ${{secrets.DOCKERHUB_USERNAME}} --password-stdin
+
+      - name: Push backend image
+        run: docker push ${{secrets.DOCKERHUB_USERNAME}}/my-f-backend:latest 
+
+      - name: Push frontend image
+        run: docker push ${{secrets.DOCKERHUB_USERNAME}}/my-f-frontend:latest
+
+      - name: Pull backend image
+        run: docker pull ${{secrets.DOCKERHUB_USERNAME}}/my-f-backend:latest
+
+      - name: Pull frontend image
+        run: docker pull ${{secrets.DOCKERHUB_USERNAME}}/my-f-frontend:latest
+
+      - name: Stop and remove old containers
+        run: docker-compose down || true
+
+      - name: Start new containers
+        run: docker-compose -f docker-compose.prod.yml up -d
+
+      - name: Run TypeORM migration
+        working-directory: ./backend
+        run: docker exec $(docker ps -qf "ancestor=${{secrets.DOCKERHUB_USERNAME}}/my-f-backend:latest") npm run migration:run
+
+      - name: Clean up old images
+        run: docker image prune -f 
